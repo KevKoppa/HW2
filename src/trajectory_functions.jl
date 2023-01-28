@@ -34,8 +34,8 @@ function create_callback_generator(trajectory_length=40, timestep=0.2, R = Diago
         append!(constraints_val, all_states[k+1] .- evolve_state(all_states[k], controls[k], timestep))
         append!(constraints_lb, zeros(4))
         append!(constraints_ub, zeros(4))
-        append!(constraints_val, lane_constraint(states[k], a¹, b¹))
-        append!(constraints_val, lane_constraint(states[k], a², b²))
+        append!(constraints_val, lane_constraint(states[k], a¹, b¹, r¹))
+        append!(constraints_val, lane_constraint(states[k], a², b², r¹))
         append!(constraints_lb, zeros(2))
         append!(constraints_ub, fill(Inf, 2))
         append!(constraints_val, collision_constraint(states[k], vehicle_2_prediction[k], r¹, r²))
@@ -45,6 +45,9 @@ function create_callback_generator(trajectory_length=40, timestep=0.2, R = Diago
         append!(constraints_val, states[k][3])
         append!(constraints_lb, 0.0)
         append!(constraints_ub, max_vel)
+        append!(constraints_val, states[k][4])
+        append!(constraints_lb, -pi/4)
+        append!(constraints_ub, pi/4)
     end
 
     constraints_jac = Symbolics.sparsejacobian(constraints_val, Z)
@@ -124,8 +127,8 @@ function evolve_state(X, U, Δ)
     X + Δ * [V*cos(θ), V*sin(θ), U[1], U[2]]
 end
 
-function lane_constraint(X, a, b)
-    a'X[1:2]-b
+function lane_constraint(X, a, b, r)
+    a'*(X[1:2] - a*r)-b
 end
 
 function collision_constraint(X1, X2, r1, r2)
@@ -136,7 +139,7 @@ end
 Cost at each stage of the plan
 """
 function stage_cost(X, U, R)
-    cost = -0.01*X[3] + U'*R*U
+    cost = -0.1*X[3] + U'*R*U
 end
 
 
