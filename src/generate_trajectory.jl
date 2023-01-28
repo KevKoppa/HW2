@@ -161,7 +161,6 @@ function visualize_simulation(sim_results, a1,b1,a2,b2, lane_length)
     end
     record(f, "mpc_animation.mp4", sim_results;
         framerate = 10) do sim_step 
-    #for sim_step in sim_results
         for (t,state) in zip(traj, sim_step.trajectory.states)
             wstate = wrap(state, lane_length)
             t[] = Point2f(wstate[1], wstate[2])
