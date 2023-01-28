@@ -5,27 +5,28 @@ function simulate(;
         traj_length = 15,
         R = Diagonal([0.1, 0.5]),
         lane_width = 15, 
-        lane_length = 100, 
+        track_radius = 25,
         num_vehicles = 7, 
         min_r = 1.5, 
-        max_r = 3.5, 
+        max_r = 3, 
         max_vel = 12)
+
     sim_records = []
-    a¹ = [0; 1]; b¹ = -lane_width / 2.0
-    a² = [0; -1]; b² = -lane_width / 2.0
+    track_center = [0.0,0.0]
 
     # vehicle 1 is EGO
-    vehicles = [generate_random_vehicle(rng, lane_width, lane_length, min_r, max_r, max_vel),]
+    vehicles = [generate_random_vehicle(rng, lane_width, track_radius, track_center, min_r, max_r, max_vel),]
     while length(vehicles) < num_vehicles
-        v = generate_random_vehicle(rng, lane_width, lane_length, min_r, max_r, max_vel/2)
+        v = generate_random_vehicle(rng, lane_width, track_radius, track_center, min_r, max_r, max_vel/2)
         if any(collision_constraint(v.state, v2.state, v.r, v2.r) < 1.0 for v2 in vehicles)
             continue
         else
             push!(vehicles, v)
         end
     end
-    #vehicles = [generate_random_vehicle(rng, lane_width, lane_length, min_r, max_r, max_vel) for _ in 1:num_vehicles]
-    callbacks = create_callback_generator(traj_length, timestep, R, max_vel)
+    target_radii = [norm(v.state[1:2]-track_center) for v in vehicles]
+    # TODO Setup callbacks appropriately
+    #callbacks = create_callback_generator(traj_length, timestep, R, max_vel)
 
     @showprogress for t = 1:sim_steps
         ego = vehicles[1]
@@ -34,36 +35,46 @@ function simulate(;
         V2 = vehicles[closest[1]]
         V3 = vehicles[closest[2]]
         
-        trajectory = generate_trajectory(ego, V2, V3, a¹, b¹, a², b², callbacks, traj_length, timestep)
+        trajectory = (; states = repeat([ego.state,], traj_length), controls = repeat([zeros(2),], traj_length))
+        # TODO: replace with this when working
+        #trajectory = generate_trajectory(ego, V2, V3, lane_width, track_radius, track_center, callbacks, timestep)
 
         push!(sim_records, (; vehicles=copy(vehicles), trajectory))
+        vehicles[1] = (; state = trajectory.states[1], r=vehicles[1].r)
 
-        vehicles[1] = (; state = wrap(trajectory.states[1], lane_length), r=vehicles[1].r)
+        for i in 2:num_vehicles
+            old_state = vehicles[i].state
+            control = generate_tracking_control(target_radii[i], track_center, old_state)
+            new_state = evolve_state(old_state, control, timestep)
+            vehicles[i] = (; state=new_state, vehicles[i].r)
+        end
         
-        foreach(i->vehicles[i] = (; state = wrap(evolve_state(vehicles[i].state, zeros(2), timestep), lane_length), vehicles[i].r), 2:num_vehicles)
+        #foreach(i->vehicles[i] = (; state = evolve_state(vehicles[i].state, zeros(2), timestep), vehicles[i].r), 2:num_vehicles)
     end
-    visualize_simulation(sim_records, a¹, b¹, a², b²,lane_length)
+    visualize_simulation(sim_records, track_radius, track_center, lane_width)
 end
 
-
-function wrap(X, lane_length)
-    X_wrapped = copy(X)
-    if X_wrapped[1] > lane_length
-        X_wrapped[1] -= lane_length
-    end
-    X_wrapped
+function generate_tracking_control(target_radius, track_center, state)
+    cur_radius = norm(state[1:2]-track_center)
+    err = cur_radius-target_radius
+    u = [0.0, err]
 end
 
-function generate_random_vehicle(rng, lane_width, lane_length, min_r, max_r, max_vel)
+"""
+Generate a random vehicle size and state on a circular track with radius track_radius,
+center track_center, and width lane_width.
+"""
+function generate_random_vehicle(rng, lane_width, track_radius, track_center, min_r, max_r, max_vel)
     r = rand(rng)*(max_r-min_r) + min_r
-    p1 = rand(rng)*lane_length
-    p2 = rand(rng)*(lane_width-2r)+(r-lane_width/2)
+    θ = rand(rng)*2π
+    rad = rand(rng)*(lane_width-2r) + track_radius-lane_width/2+r
+    p1 = cos(θ-π/2)*rad
+    p2 = sin(θ-π/2)*rad
     v = rand(rng)*max_vel/2 + max_vel
-    θ = 0.0
     (; state=[p1, p2, v, θ], r)
 end
 
-function generate_trajectory(ego, V2, V3, a¹, b¹, a², b², callbacks, trajectory_length, timestep)
+function generate_trajectory(ego, V2, V3, lane_width, track_radius, track_center, callbacks, timestep)
     X1 = ego.state
     X2 = V2.state
     X3 = V3.state
@@ -71,33 +82,22 @@ function generate_trajectory(ego, V2, V3, a¹, b¹, a², b², callbacks, traject
     r2 = V2.r
     r3 = V3.r
    
-    # refine callbacks with current values of parameters / problem inputs
+    # TODO refine callbacks given current positions of vehicles, lane geometry,
+    # etc.
     wrapper_f = function(z)
-        callbacks.full_cost_fn(z, X1, X2, X3, r1, r2, r3, a¹, b¹, a², b²)
+        # TODO
     end
     wrapper_grad_f = function(z, grad)
-        callbacks.full_cost_grad_fn(grad, z, X1, X2, X3, r1, r2, r3, a¹, b¹, a², b²)
+        # TODO
     end
     wrapper_con = function(z, con)
-        callbacks.full_constraint_fn(con, z, X1, X2, X3, r1, r2, r3, a¹, b¹, a², b²)
+        # TODO
     end
     wrapper_con_jac = function(z, rows, cols, vals)
-        if isnothing(vals)
-            rows .= callbacks.full_constraint_jac_triplet.jac_rows
-            cols .= callbacks.full_constraint_jac_triplet.jac_cols
-        else
-            callbacks.full_constraint_jac_triplet.full_constraint_jac_vals_fn(vals, z, X1, X2, X3, r1, r2, r3, a¹, b¹, a², b²)
-        end
-        nothing
+        # TODO
     end
     wrapper_lag_hess = function(z, rows, cols, cost_scaling, λ, vals)
-        if isnothing(vals)
-            rows .= callbacks.full_lag_hess_triplet.hess_rows
-            cols .= callbacks.full_lag_hess_triplet.hess_cols
-        else
-            callbacks.full_lag_hess_triplet.full_hess_vals_fn(vals, z, X1, X2, X3, r1, r2, r3, a¹, b¹, a², b², λ, cost_scaling)
-        end
-        nothing
+        # TODO
     end
 
     n = trajectory_length*6
@@ -119,7 +119,6 @@ function generate_trajectory(ego, V2, V3, a¹, b¹, a², b², callbacks, traject
     )
 
     controls = repeat([zeros(2),], trajectory_length)
-    #states = constant_velocity_prediction(X1, trajectory_length, timestep)
     states = repeat([X1,], trajectory_length)
     zinit = compose_trajectory(states, controls)
     prob.x = zinit
@@ -134,16 +133,17 @@ function generate_trajectory(ego, V2, V3, a¹, b¹, a², b², callbacks, traject
     (; states, controls, status)
 end
 
-function visualize_simulation(sim_results, a1,b1,a2,b2, lane_length)
+function visualize_simulation(sim_results, track_radius, track_center, lane_width)
     f = Figure()
     ax = f[1,1] = Axis(f, aspect = DataAspect())
-    xlims!(ax, 0, lane_length)
-    ylims!(ax, -lane_length/2, lane_length/2)
-    xcoords = [0, lane_length]
-    ycoords1 = (b1 .- xcoords .* a1[1]) ./ a1[2]
-    ycoords2 = (b2 .- xcoords .* a2[1]) ./ a2[2]
-    lines!(xcoords, ycoords1, color=:black, linewidth=3)
-    lines!(xcoords, ycoords2, color=:black, linewidth=3)
+    r_inside = track_radius - lane_width/2
+    r_outside = track_radius + lane_width/2
+    xlims!(ax, track_center[1]-r_outside, track_center[1]+r_outside)
+    ylims!(ax, track_center[2]-r_outside, track_center[2]+r_outside)
+
+    θ = 0:0.1:2pi+0.1
+    lines!(r_inside*cos.(θ), r_inside*sin.(θ), color=:black, linewidth=3)
+    lines!(r_outside*cos.(θ), r_outside*sin.(θ), color=:black, linewidth=3)
 
     ps = [Observable(Point2f(v.state[1], v.state[2])) for v in sim_results[1].vehicles]
     traj = [Observable(Point2f(state[1], state[2])) for state in sim_results[1].trajectory.states]
@@ -159,11 +159,11 @@ function visualize_simulation(sim_results, a1,b1,a2,b2, lane_length)
             poly!(ax, circle, color = :red)
         end
     end
-    record(f, "mpc_animation.mp4", sim_results;
-        framerate = 10) do sim_step 
+    #record(f, "mpc_circle_animation.mp4", sim_results; framerate = 10) do sim_step
+    #(uncomment above line and comment below line to create visualization)
+    for sim_step in sim_results
         for (t,state) in zip(traj, sim_step.trajectory.states)
-            wstate = wrap(state, lane_length)
-            t[] = Point2f(wstate[1], wstate[2])
+            t[] = Point2f(state[1], state[2])
         end
         for (p,v) in zip(ps, sim_step.vehicles)
             p[] = Point2f(v.state[1], v.state[2])
