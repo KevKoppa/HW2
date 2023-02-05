@@ -1,5 +1,5 @@
 function simulate(;
-        rng = MersenneTwister(420),
+        rng = MersenneTwister(114),
         sim_steps = 100, 
         timestep = 0.2, 
         traj_length = 15,
@@ -26,7 +26,7 @@ function simulate(;
     end
     target_radii = [norm(v.state[1:2]-track_center) for v in vehicles]
     # TODO Setup callbacks appropriately
-    #callbacks = create_callback_generator(traj_length, timestep, R, max_vel)
+    callbacks = create_callback_generator(traj_length, timestep, R, max_vel)
 
     @showprogress for t = 1:sim_steps
         ego = vehicles[1]
@@ -35,9 +35,9 @@ function simulate(;
         V2 = vehicles[closest[1]]
         V3 = vehicles[closest[2]]
         
-        trajectory = (; states = repeat([ego.state,], traj_length), controls = repeat([zeros(2),], traj_length))
+        #trajectory = (; states = repeat([ego.state,], traj_length), controls = repeat([zeros(2),], traj_length))
         # TODO: replace with this when working
-        #trajectory = generate_trajectory(ego, V2, V3, lane_width, track_radius, track_center, callbacks, timestep)
+        trajectory = generate_trajectory(ego, V2, V3, lane_width, track_radius, track_center, callbacks, timestep, traj_length)
 
         push!(sim_records, (; vehicles=copy(vehicles), trajectory))
         vehicles[1] = (; state = trajectory.states[1], r=vehicles[1].r)
@@ -74,7 +74,7 @@ function generate_random_vehicle(rng, lane_width, track_radius, track_center, mi
     (; state=[p1, p2, v, θ], r)
 end
 
-function generate_trajectory(ego, V2, V3, lane_width, track_radius, track_center, callbacks, timestep)
+function generate_trajectory(ego, V2, V3, lane_width, track_radius, track_center, callbacks, timestep, trajectory_length)
     X1 = ego.state
     X2 = V2.state
     X3 = V3.state
@@ -85,19 +85,31 @@ function generate_trajectory(ego, V2, V3, lane_width, track_radius, track_center
     # TODO refine callbacks given current positions of vehicles, lane geometry,
     # etc.
     wrapper_f = function(z)
-        # TODO
+        callbacks.full_cost_fn(z, X1, X2, X3, r1, r2, r3, track_center, track_radius, lane_width)
     end
     wrapper_grad_f = function(z, grad)
-        # TODO
+        callbacks.full_cost_grad_fn(grad, z, X1, X2, X3, r1, r2, r3, track_center, track_radius, lane_width)
     end
     wrapper_con = function(z, con)
-        # TODO
+        callbacks.full_constraint_fn(con, z, X1, X2, X3, r1, r2, r3, track_center, track_radius, lane_width)
     end
     wrapper_con_jac = function(z, rows, cols, vals)
-        # TODO
+        if isnothing(vals)
+            rows .= callbacks.full_constraint_jac_triplet.jac_rows
+            cols .= callbacks.full_constraint_jac_triplet.jac_cols
+        else
+            callbacks.full_constraint_jac_triplet.full_constraint_jac_vals_fn(vals, z, X1, X2, X3, r1, r2, r3, track_center, track_radius, lane_width)
+        end
+        nothing
     end
     wrapper_lag_hess = function(z, rows, cols, cost_scaling, λ, vals)
-        # TODO
+        if isnothing(vals)
+            rows .= callbacks.full_lag_hess_triplet.hess_rows
+            cols .= callbacks.full_lag_hess_triplet.hess_cols
+        else
+            callbacks.full_lag_hess_triplet.full_hess_vals_fn(vals, z, X1, X2, X3, r1, r2, r3, track_center, track_radius, lane_width, λ, cost_scaling)
+        end
+        nothing
     end
 
     n = trajectory_length*6
@@ -159,9 +171,9 @@ function visualize_simulation(sim_results, track_radius, track_center, lane_widt
             poly!(ax, circle, color = :red)
         end
     end
-    #record(f, "mpc_circle_animation.mp4", sim_results; framerate = 10) do sim_step
+    record(f, "mpc_circle_animation.mp4", sim_results; framerate = 10) do sim_step
     #(uncomment above line and comment below line to create visualization)
-    for sim_step in sim_results
+    #for sim_step in sim_results
         for (t,state) in zip(traj, sim_step.trajectory.states)
             t[] = Point2f(state[1], state[2])
         end
